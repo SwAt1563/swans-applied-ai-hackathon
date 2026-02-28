@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: richards-law-automation
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: CLIO_CLIENT_ID
+        sync: false
+      - key: CLIO_CLIENT_SECRET
+        sync: false
+      - key: CLIO_REDIRECT_URI
+        sync: false
