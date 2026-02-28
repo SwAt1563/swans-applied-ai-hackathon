@@ -293,38 +293,39 @@ async def run_full_workflow(request: WorkflowRequest):
             )
             response.document_generated = True
             
-            automation_job_id = doc_result.get("id")
-            
-            if automation_job_id:
-                # --- START POLLING LOOP ---
-                max_attempts = 8
-                actual_document_id = None
+
+            # TODO: Later if we need to support sending emails
+            # automation_job_id = doc_result.get("id")
+            # if automation_job_id:
+            #     # --- START POLLING LOOP ---
+            #     max_attempts = 8
+            #     actual_document_id = None
                 
-                for attempt in range(max_attempts):
-                    # Check if the PDF was somehow generated instantly on the first try
-                    current_state = doc_result.get("state") if attempt == 0 else job_status.get("state")
+            #     for attempt in range(max_attempts):
+            #         # Check if the PDF was somehow generated instantly on the first try
+            #         current_state = doc_result.get("state") if attempt == 0 else job_status.get("state")
                     
-                    if current_state == "failed":
-                        errors.append("Clio failed to generate the document.")
-                        break
+            #         if current_state == "failed":
+            #             errors.append("Clio failed to generate the document.")
+            #             break
                         
-                    if current_state == "completed":
-                        # If it's done, grab the ID from the documents array!
-                        generated_docs = doc_result.get("documents", []) if attempt == 0 else job_status.get("documents", [])
-                        if generated_docs and len(generated_docs) > 0:
-                            actual_document_id = generated_docs[0]["id"]
-                        break
+            #         if current_state == "completed":
+            #             # If it's done, grab the ID from the documents array!
+            #             generated_docs = doc_result.get("documents", []) if attempt == 0 else job_status.get("documents", [])
+            #             if generated_docs and len(generated_docs) > 0:
+            #                 actual_document_id = generated_docs[0]["id"]
+            #             break
 
-                    # If not done, wait 4 seconds and ask Clio again
-                    await asyncio.sleep(4)
-                    job_status = await clio.get_document_automation(DEMO_USER_ID, automation_job_id)
-                # --- END POLLING LOOP ---
+            #         # If not done, wait 4 seconds and ask Clio again
+            #         await asyncio.sleep(4)
+            #         job_status = await clio.get_document_automation(DEMO_USER_ID, automation_job_id)
+            #     # --- END POLLING LOOP ---
 
-                # Now that we have the real file ID, download the actual bytes
-                if actual_document_id:
-                    retainer_pdf_content = await clio.download_document(user_id=DEMO_USER_ID, document_id=actual_document_id)
-                else:
-                    errors.append("Document generation timed out or returned no files after 32 seconds.")
+            #     # Now that we have the real file ID, download the actual bytes
+            #     if actual_document_id:
+            #         retainer_pdf_content = await clio.download_document(user_id=DEMO_USER_ID, document_id=actual_document_id)
+            #     else:
+            #         errors.append("Document generation timed out or returned no files after 32 seconds.")
                     
         except Exception as e:
             errors.append(f"Document generation error: {str(e)}")
