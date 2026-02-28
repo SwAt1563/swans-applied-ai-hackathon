@@ -1,6 +1,5 @@
 import os
 
-import base64
 from datetime import datetime
 from typing import Optional, Literal
 from pydantic import BaseModel, Field, computed_field

@@ -18,13 +18,14 @@ from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import re
-from docx.shared import Pt, Inches  # <-- Add Inches here
+from docx.shared import Pt, Inches  
 import time
 import asyncio
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 # ==========================================
 # Hackathon Multi-Tenant Mock
@@ -172,6 +173,7 @@ async def run_full_workflow(request: WorkflowRequest):
             client_gender=request.client_gender,
             police_report_number=request.police_report_number
         )
+
 
         matter_id = request.matter_id
         template_id = request.template_id
@@ -434,7 +436,7 @@ async def create_default_template():
         doc.add_paragraph("\nACCEPTED BY:\n")
         doc.add_paragraph("CLIENT ___________________________                                        Date: _____________________")
         add_paragraph_with_vars(doc, "<< Matter.Client.Name >>\n")
-        add_paragraph_with_vars(doc, "<< Firm.Name >> Attorney _________________________             Date: _____________________")
+        add_paragraph_with_vars(doc, "Richards & Law Attorney _________________________             Date: _____________________")
         add_paragraph_with_vars(doc, "<< Matter.ResponsibleAttorney >>")
 
         # Save to memory and Base64 encode

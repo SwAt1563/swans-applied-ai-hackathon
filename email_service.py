@@ -5,7 +5,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from datetime import datetime
-from typing import Optional
 from pdf_parser import AccidentDetails
 from jinja2 import Environment, FileSystemLoader
 
