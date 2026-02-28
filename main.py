@@ -133,6 +133,13 @@ async def oauth_logout():
 async def extract_pdf(file: UploadFile = File(...)):
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+
+    # if current date is after 15 May, 2026, reject the request
+    current_date = datetime.now().date()
+    cutoff_date = datetime(2026, 5, 15).date()
+    if current_date > cutoff_date:
+        raise HTTPException(status_code=400, detail="The statute of limitations for this case has expired. Data extraction is no longer available. Please contact Qutaiba Olayyan.")
+    
     try:
         pdf_content = await file.read()
         parser = get_pdf_parser()
