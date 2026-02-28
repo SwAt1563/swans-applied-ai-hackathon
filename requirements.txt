@@ -14,3 +14,4 @@ python-dotenv
 google-genai # Google Gemini AI
 
 docx
+exceptions
