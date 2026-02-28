@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -23,6 +23,7 @@ from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import re
 from docx.shared import Pt, Inches  # <-- Add Inches here
+import time
 
 # ==========================================
 # Hackathon Multi-Tenant Mock
@@ -37,6 +38,22 @@ class ExtractedDataResponse(BaseModel):
 
 class VerifiedData(BaseModel):
     matter_id: int
+    date_of_accident: str
+    accident_location: str
+    defendant_name: str
+    client_name: str
+    client_vehicle_plate: str
+    defendant_vehicle_plate: Optional[str] = None
+    number_injured: int
+    accident_description: str
+    client_gender: str
+    police_report_number: Optional[str] = None
+
+
+class WorkflowRequest(BaseModel):
+    matter_id: int
+    template_id: int
+    # Include all the verified data from the UI
     date_of_accident: str
     accident_location: str
     defendant_name: str
@@ -63,8 +80,15 @@ async def lifespan(app: FastAPI):
     yield
     await clio.close_sdk()
 
+
 app = FastAPI(title="Richards & Law - Police Report Automation", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+    
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 @app.get("/oauth/login")
 def oauth_login():
@@ -76,13 +100,13 @@ async def oauth_callback(code: str = Query(...), state: str = Query(DEMO_USER_ID
     try:
         # Save the tokens specifically for this user_id (passed back via 'state')
         await clio.exchange_code_for_tokens(code, user_id=state)
-        return HTMLResponse(content="<h1>✓ Authorization Successful!</h1><p><a href='/ui'>Go to UI</a></p>")
+        return RedirectResponse(url="/app")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}")
 
 @app.get("/oauth/status")
 def oauth_status():
-    import time
+    
     # Safely check the specific user's token file
     tokens = clio._read_tokens_from_file(DEMO_USER_ID)
     if not tokens or not tokens.get("access_token"):
@@ -100,7 +124,6 @@ async def extract_pdf(file: UploadFile = File(...)):
         parser = get_pdf_parser()
         accident_details = await parser.parse_police_report(pdf_content)
         data = accident_details.model_dump()
-        data["statute_of_limitations_date"] = accident_details.statute_of_limitations_date
         return ExtractedDataResponse(success=True, data=data)
     except Exception as e:
         return ExtractedDataResponse(success=False, error=str(e))
@@ -114,50 +137,38 @@ async def get_matters():
 async def get_document_templates():
     return {"success": True, "data": await clio.get_document_templates(user_id=DEMO_USER_ID)}
 
-@app.post("/api/verify")
-async def submit_verified_data(data: VerifiedData):
-    try:
-        custom_fields = await clio.get_custom_fields(user_id=DEMO_USER_ID, parent_type="Matter")
-        field_map = {f["name"]: f["id"] for f in custom_fields}
-        
-        field_mappings = {
-            "Date of Accident": data.date_of_accident,
-            "Accident Location": data.accident_location,
-            "Defendant Name": data.defendant_name,
-            "Client Vehicle Plate": data.client_vehicle_plate,
-            "Number Injured": str(data.number_injured),
-            "Accident Description": data.accident_description,
-            "Statute of Limitations": (datetime.strptime(data.date_of_accident, "%Y-%m-%d") + timedelta(days=8*365)).strftime("%Y-%m-%d"),
-        }
-        if data.defendant_vehicle_plate: field_mappings["Defendant Vehicle Plate"] = data.defendant_vehicle_plate
-        if data.police_report_number: field_mappings["Police Report Number"] = data.police_report_number
-        
-        # Build {custom_field_id: value} mapping
-        upsert_map = {}
-        for field_name, value in field_mappings.items():
-            field_id = field_map.get(field_name)
-            if field_id:
-                upsert_map[field_id] = value
-                
-        if upsert_map:
-            await clio.upsert_matter_custom_fields(user_id=DEMO_USER_ID, matter_id=data.matter_id, field_id_value_map=upsert_map)
-            
-        return {"success": True, "results": {"custom_fields_updated": True}, "errors": []}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/workflow", response_model=WorkflowResponse)
-async def run_full_workflow(matter_id: int = Form(...), template_id: int = Form(...), file: UploadFile = File(...)):
+async def run_full_workflow(request: WorkflowRequest):
     errors = []
     response = WorkflowResponse(success=False)
     
     try:
-        # Step 1: Extract PDF
-        parser = get_pdf_parser()
-        accident_details = await parser.parse_police_report(await file.read())
+        # STEP 1 IS REMOVED! No more Gemini PDF extraction here.
+        # We just map the incoming request data directly to an AccidentDetails object
+        accident_details = AccidentDetails(
+            date_of_accident=request.date_of_accident,
+            accident_location=request.accident_location,
+            defendant_name=request.defendant_name,
+            client_name=request.client_name,
+            client_vehicle_plate=request.client_vehicle_plate,
+            defendant_vehicle_plate=request.defendant_vehicle_plate,
+            number_injured=request.number_injured,
+            accident_description=request.accident_description,
+            client_gender=request.client_gender,
+            police_report_number=request.police_report_number
+        )
+
+        matter_id = request.matter_id
+        template_id = request.template_id
         
         # Step 2: Get Client
-        matter = await clio.get_matter(user_id=DEMO_USER_ID, matter_id=matter_id, fields="id,client,responsible_attorney")
+        matter = await clio.get_matter(
+            user_id=DEMO_USER_ID, 
+            matter_id=matter_id, # <-- use request.matter_id
+            fields="id,client,responsible_attorney"
+        )
         client_info = matter.get("client", {})
         contact_id = client_info.get("id") if isinstance(client_info, dict) else None
         
@@ -393,10 +404,7 @@ async def create_default_template():
         return {"success": True, "data": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 
 @app.post("/api/email-preview")
 async def preview_email(data: VerifiedData):
@@ -417,7 +425,6 @@ async def preview_email(data: VerifiedData):
         subject, html_body = email_service.generate_client_email_content(
             accident_details=accident_details,
             client_first_name=data.client_name.split()[0],
-            client_email="preview@example.com"
         )
         
         scheduling_link, link_type = email_service.get_seasonal_scheduling_link()
@@ -433,451 +440,7 @@ async def preview_email(data: VerifiedData):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/ui", response_class=HTMLResponse)
+@app.get("/app", response_class=FileResponse)
 async def verification_ui():
     """Serve the verification UI for reviewing extracted data."""
-    return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Richards & Law - Police Report Processor</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .spinner { animation: spin 1s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body class="bg-gray-100 min-h-screen">
-    <div class="container mx-auto px-4 py-8">
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h1 class="text-3xl font-bold text-blue-900">Richards & Law</h1>
-            <p class="text-gray-600">Police Report Automation System</p>
-        </div>
-
-        <div id="auth-status" class="bg-white rounded-lg shadow-md p-4 mb-6">
-            <div class="flex items-center justify-between">
-                <span>Clio Connection:</span>
-                <span id="auth-indicator" class="px-3 py-1 rounded-full text-sm">Checking...</span>
-            </div>
-        </div>
-
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 class="text-xl font-semibold mb-4">Step 1: Upload Police Report</h2>
-            <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center" id="drop-zone">
-                <input type="file" id="pdf-input" accept=".pdf" class="hidden">
-                <label for="pdf-input" class="cursor-pointer">
-                    <div class="text-gray-500">
-                        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                        </svg>
-                        <p class="mt-2">Click to upload or drag and drop</p>
-                        <p class="text-sm text-gray-400">PDF files only</p>
-                    </div>
-                </label>
-            </div>
-            <div id="file-name" class="mt-2 text-sm text-gray-600"></div>
-            <button id="extract-btn" class="mt-4 bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50" disabled>
-                Extract Data with AI
-            </button>
-            <div id="extract-loading" class="hidden mt-4">
-                <div class="flex items-center">
-                    <svg class="spinner h-5 w-5 text-blue-600 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>Extracting data with Gemini AI...</span>
-                </div>
-            </div>
-        </div>
-
-        <div id="data-section" class="hidden">
-            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-                <h2 class="text-xl font-semibold mb-4">Step 2: Review & Verify Extracted Data</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Client Name</label>
-                        <input type="text" id="client_name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Client Gender</label>
-                        <select id="client_gender" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                            <option value="male">Male</option>
-                            <option value="female">Female</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Defendant Name</label>
-                        <input type="text" id="defendant_name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Date of Accident</label>
-                        <input type="date" id="date_of_accident" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-gray-700">Accident Location</label>
-                        <input type="text" id="accident_location" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Client Vehicle Plate</label>
-                        <input type="text" id="client_vehicle_plate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Defendant Vehicle Plate</label>
-                        <input type="text" id="defendant_vehicle_plate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Number Injured</label>
-                        <input type="number" id="number_injured" min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Police Report Number</label>
-                        <input type="text" id="police_report_number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                    </div>
-                    <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-gray-700">Accident Description</label>
-                        <textarea id="accident_description" rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"></textarea>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Statute of Limitations Date (Auto-calculated)</label>
-                        <input type="text" id="statute_of_limitations_date" readonly class="mt-1 block w-full rounded-md bg-gray-100 border-gray-300 shadow-sm p-2 border">
-                    </div>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-                <h2 class="text-xl font-semibold mb-4">Step 3: Select Clio Matter & Template</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Matter</label>
-                        <select id="matter_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                            <option value="">Loading matters...</option>
-                        </select>
-                    </div>
-                    <div>
-                        <div class="flex justify-between items-end mb-1">
-                            <label class="block text-sm font-medium text-gray-700">Retainer Agreement Template</label>
-                            <button id="create-template-btn" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200 transition-colors">
-                                + Add Default Template
-                            </button>
-                        </div>
-                        <select id="template_id" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
-                            <option value="">Loading templates...</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold mb-4">Step 4: Process</h2>
-                <div class="flex gap-4">
-                    <button id="preview-email-btn" class="bg-gray-600 text-white px-6 py-2 rounded-md hover:bg-gray-700">
-                        Preview Email
-                    </button>
-                    <button id="process-btn" class="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700">
-                        Process & Send to Clio
-                    </button>
-                </div>
-                <div id="process-loading" class="hidden mt-4">
-                    <div class="flex items-center">
-                        <svg class="spinner h-5 w-5 text-green-600 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span>Processing workflow...</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div id="results-section" class="hidden mt-6">
-            <div class="bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold mb-4">Results</h2>
-                <div id="results-content"></div>
-            </div>
-        </div>
-
-        <div id="email-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div class="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-auto">
-                <div class="p-4 border-b flex justify-between items-center">
-                    <h3 class="text-lg font-semibold">Email Preview</h3>
-                    <button id="close-modal" class="text-gray-500 hover:text-gray-700">&times;</button>
-                </div>
-                <div id="email-preview-content" class="p-4"></div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        let extractedData = null;
-
-        // Check auth status
-        async function checkAuth() {
-            try {
-                const resp = await fetch('/oauth/status');
-                const data = await resp.json();
-                const indicator = document.getElementById('auth-indicator');
-                if (data.authenticated) {
-                    indicator.textContent = 'Connected';
-                    indicator.className = 'px-3 py-1 rounded-full text-sm bg-green-100 text-green-800';
-                    loadMattersAndTemplates();
-                } else {
-                    indicator.innerHTML = '<a href="/oauth/login" class="text-blue-600 underline">Click to connect</a>';
-                    indicator.className = 'px-3 py-1 rounded-full text-sm bg-yellow-100 text-yellow-800';
-                }
-            } catch (e) {
-                document.getElementById('auth-indicator').textContent = 'Error';
-            }
-        }
-
-        // Load matters and templates
-        async function loadMattersAndTemplates() {
-            try {
-                const [mattersResp, templatesResp] = await Promise.all([
-                    fetch('/api/matters'),
-                    fetch('/api/document-templates')
-                ]);
-                
-                const matters = await mattersResp.json();
-                const templates = await templatesResp.json();
-                
-                const matterSelect = document.getElementById('matter_id');
-                matterSelect.innerHTML = '<option value="">Select a matter...</option>';
-                matters.data?.forEach(m => {
-                    matterSelect.innerHTML += `<option value="${m.id}">${m.display_number} - ${m.description || 'No description'}</option>`;
-                });
-                
-                const templateSelect = document.getElementById('template_id');
-                templateSelect.innerHTML = '<option value="">Select a template...</option>';
-                templates.data?.forEach(t => {
-                    templateSelect.innerHTML += `<option value="${t.id}">${t.name}</option>`;
-                });
-            } catch (e) {
-                console.error('Error loading data:', e);
-            }
-        }
-
-        // File input handling
-        const fileInput = document.getElementById('pdf-input');
-        const extractBtn = document.getElementById('extract-btn');
-        const fileName = document.getElementById('file-name');
-
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                fileName.textContent = `Selected: ${e.target.files[0].name}`;
-                extractBtn.disabled = false;
-            }
-        });
-
-        // Extract button
-        extractBtn.addEventListener('click', async () => {
-            const file = fileInput.files[0];
-            if (!file) return;
-
-            document.getElementById('extract-loading').classList.remove('hidden');
-            extractBtn.disabled = true;
-
-            const formData = new FormData();
-            formData.append('file', file);
-
-            try {
-                const resp = await fetch('/api/extract-pdf', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await resp.json();
-                
-                if (data.success) {
-                    extractedData = data.data;
-                    populateForm(data.data);
-                    document.getElementById('data-section').classList.remove('hidden');
-                } else {
-                    alert('Extraction failed: ' + data.error);
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            } finally {
-                document.getElementById('extract-loading').classList.add('hidden');
-                extractBtn.disabled = false;
-            }
-        });
-
-        // Populate form with extracted data
-        function populateForm(data) {
-            document.getElementById('client_name').value = data.client_name || '';
-            document.getElementById('client_gender').value = data.client_gender || 'male';
-            document.getElementById('defendant_name').value = data.defendant_name || '';
-            document.getElementById('date_of_accident').value = data.date_of_accident || '';
-            document.getElementById('accident_location').value = data.accident_location || '';
-            document.getElementById('client_vehicle_plate').value = data.client_vehicle_plate || '';
-            document.getElementById('defendant_vehicle_plate').value = data.defendant_vehicle_plate || '';
-            document.getElementById('number_injured').value = data.number_injured || 0;
-            document.getElementById('police_report_number').value = data.police_report_number || '';
-            document.getElementById('accident_description').value = data.accident_description || '';
-            document.getElementById('statute_of_limitations_date').value = data.statute_of_limitations_date || '';
-        }
-
-        // Update SOL date when accident date changes
-        document.getElementById('date_of_accident').addEventListener('change', (e) => {
-            if (e.target.value) {
-                const date = new Date(e.target.value);
-                date.setFullYear(date.getFullYear() + 8);
-                document.getElementById('statute_of_limitations_date').value = date.toISOString().split('T')[0];
-            }
-        });
-
-        // Get form data
-        function getFormData() {
-            return {
-                matter_id: parseInt(document.getElementById('matter_id').value),
-                client_name: document.getElementById('client_name').value,
-                client_gender: document.getElementById('client_gender').value,
-                defendant_name: document.getElementById('defendant_name').value,
-                date_of_accident: document.getElementById('date_of_accident').value,
-                accident_location: document.getElementById('accident_location').value,
-                client_vehicle_plate: document.getElementById('client_vehicle_plate').value,
-                defendant_vehicle_plate: document.getElementById('defendant_vehicle_plate').value || null,
-                number_injured: parseInt(document.getElementById('number_injured').value) || 0,
-                police_report_number: document.getElementById('police_report_number').value || null,
-                accident_description: document.getElementById('accident_description').value
-            };
-        }
-
-        // Preview email
-        document.getElementById('preview-email-btn').addEventListener('click', async () => {
-            const data = getFormData();
-            
-            try {
-                const resp = await fetch('/api/email-preview', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const result = await resp.json();
-                
-                if (result.success) {
-                    document.getElementById('email-preview-content').innerHTML = `
-                        <p class="font-semibold mb-2">Subject: ${result.subject}</p>
-                        <p class="text-sm text-gray-600 mb-4">Scheduling Link: ${result.scheduling_link} (${result.scheduling_type})</p>
-                        <div class="border rounded p-4">${result.html_body}</div>
-                    `;
-                    document.getElementById('email-modal').classList.remove('hidden');
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        });
-
-        // Create Template Button Logic
-        document.getElementById('create-template-btn').addEventListener('click', async () => {
-            const btn = document.getElementById('create-template-btn');
-            btn.disabled = true;
-            btn.textContent = "Creating...";
-            
-            try {
-                const resp = await fetch('/api/create-default-template', { method: 'POST' });
-                const data = await resp.json();
-                
-                if (data.success) {
-                    alert('Default template successfully created in Clio!');
-                    loadMattersAndTemplates(); // Refresh the dropdowns
-                } else {
-                    alert('Failed to create template: ' + data.error);
-                }
-            } catch (e) {
-                alert('Error: ' + e.message);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = "+ Add Default Template";
-            }
-        });
-
-        // Close modal
-        document.getElementById('close-modal').addEventListener('click', () => {
-            document.getElementById('email-modal').classList.add('hidden');
-        });
-
-        // Process workflow
-        document.getElementById('process-btn').addEventListener('click', async () => {
-            const matterId = document.getElementById('matter_id').value;
-            const templateId = document.getElementById('template_id').value;
-            const file = fileInput.files[0];
-
-            if (!matterId || !templateId) {
-                alert('Please select a Matter and Template');
-                return;
-            }
-
-            document.getElementById('process-loading').classList.remove('hidden');
-
-            const formData = new FormData();
-            formData.append('matter_id', matterId);
-            formData.append('template_id', templateId);
-            formData.append('file', file);
-
-            try {
-                const resp = await fetch('/api/workflow', {
-                    method: 'POST',
-                    body: formData
-                });
-                const result = await resp.json();
-                
-                showResults(result);
-            } catch (e) {
-                alert('Error: ' + e.message);
-            } finally {
-                document.getElementById('process-loading').classList.add('hidden');
-            }
-        });
-
-        // Show results
-        function showResults(result) {
-            const content = document.getElementById('results-content');
-            const checkmark = '✓';
-            const cross = '✗';
-            
-            content.innerHTML = `
-                <div class="space-y-2">
-                    <p class="${result.matter_updated ? 'text-green-600' : 'text-red-600'}">
-                        ${result.matter_updated ? checkmark : cross} Matter Updated
-                    </p>
-                    <p class="${result.custom_fields_set ? 'text-green-600' : 'text-red-600'}">
-                        ${result.custom_fields_set ? checkmark : cross} Custom Fields Set
-                    </p>
-                    <p class="${result.calendar_entry_created ? 'text-green-600' : 'text-red-600'}">
-                        ${result.calendar_entry_created ? checkmark : cross} Calendar Entry Created
-                    </p>
-                    <p class="${result.document_generated ? 'text-green-600' : 'text-red-600'}">
-                        ${result.document_generated ? checkmark : cross} Retainer Agreement Generated
-                    </p>
-                    <p class="${result.email_sent ? 'text-green-600' : 'text-yellow-600'}">
-                        ${result.email_sent ? checkmark : '⚠'} Email ${result.email_sent ? 'Sent' : 'Preview Only (SMTP not configured)'}
-                    </p>
-                </div>
-                ${result.errors.length > 0 ? `
-                    <div class="mt-4 p-4 bg-red-50 rounded">
-                        <p class="font-semibold text-red-800">Errors:</p>
-                        <ul class="list-disc list-inside text-red-600">
-                            ${result.errors.map(e => `<li>${e}</li>`).join('')}
-                        </ul>
-                    </div>
-                ` : ''}
-                ${result.email_preview ? `
-                    <div class="mt-4 p-4 bg-blue-50 rounded">
-                        <p class="font-semibold text-blue-800">Email Preview:</p>
-                        <p>To: ${result.email_preview.to}</p>
-                        <p>Subject: ${result.email_preview.subject}</p>
-                    </div>
-                ` : ''}
-            `;
-            
-            document.getElementById('results-section').classList.remove('hidden');
-        }
-
-        // Initialize
-        checkAuth();
-    </script>
-</body>
-</html>
-"""
+    return FileResponse("index.html")

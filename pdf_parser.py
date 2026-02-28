@@ -1,8 +1,9 @@
 import os
+
 import base64
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from pydantic import BaseModel, Field, computed_field
 import google.generativeai as genai
 
 
@@ -15,9 +16,10 @@ class AccidentDetails(BaseModel):
     defendant_vehicle_plate: Optional[str] = Field(description="Registration plate of defendant's vehicle (or empty string if not found)")
     number_injured: int = Field(description="Number of people injured in the accident")
     accident_description: str = Field(description="Brief description of how the accident occurred")
-    client_gender: str = Field(description="Gender of client: 'male' or 'female'")
+    client_gender: Literal["male", "female"] = Field(description="Gender of client: 'male' or 'female'")
     police_report_number: Optional[str] = Field(description="Police report number if available (or empty string)")
     
+    @computed_field
     @property
     def statute_of_limitations_date(self) -> str:
         """Calculate statute of limitations date (8 years from accident)."""
@@ -25,26 +27,21 @@ class AccidentDetails(BaseModel):
         sol_date = accident_date.replace(year=accident_date.year + 8)
         return sol_date.strftime("%Y-%m-%d")
     
+    @computed_field
     @property
     def pronoun_his_her(self) -> str:
         """Dynamically returns 'his' or 'her' based on extracted gender."""
-        if not self.client_gender:
-            return "their" # Fallback
-        return "his" if self.client_gender.lower() == "male" else "her"
+        return "his" if self.client_gender == "male" else "her"
     
+    @computed_field
     @property
     def pronoun_he_she(self) -> str:
         """Dynamically returns 'he' or 'she' based on extracted gender."""
-        if not self.client_gender:
-            return "they" # Fallback
-        return "he" if self.client_gender.lower() == "male" else "she"
+        return "he" if self.client_gender == "male" else "she"
     
 class GeminiPDFParser:
     def __init__(self):
         api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is not set")
-        
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-3.1-pro-preview')
     

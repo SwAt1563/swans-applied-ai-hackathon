@@ -7,7 +7,7 @@ from email.mime.application import MIMEApplication
 from datetime import datetime
 from typing import Optional
 from pdf_parser import AccidentDetails
-
+from jinja2 import Environment, FileSystemLoader
 
 class EmailService:
     """Service for sending personalized emails to clients."""
@@ -47,16 +47,12 @@ class EmailService:
             return self.VIRTUAL_SCHEDULING_LINK, "virtual"
     
     def generate_client_email_content(
-        self,
+        self, 
         accident_details: AccidentDetails,
         client_first_name: str,
-        client_email: str
     ) -> tuple[str, str]:
         """
-        Generate personalized email content for the potential client.
-        
-        Returns:
-            Tuple of (subject, html_body)
+        Generate personalized email content for the potential client using Jinja2.
         """
         scheduling_link, link_type = self.get_seasonal_scheduling_link()
         consultation_type = "in-office" if link_type == "in-office" else "virtual"
@@ -70,102 +66,19 @@ class EmailService:
         
         subject = f"Richards & Law - Your Consultation & Retainer Agreement"
         
-        html_body = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{
-            font-family: 'Georgia', serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-        }}
-        .header {{
-            border-bottom: 2px solid #1a365d;
-            padding-bottom: 15px;
-            margin-bottom: 25px;
-        }}
-        .firm-name {{
-            color: #1a365d;
-            font-size: 24px;
-            font-weight: bold;
-            margin: 0;
-        }}
-        .content {{
-            margin-bottom: 25px;
-        }}
-        .cta-button {{
-            display: inline-block;
-            background-color: #1a365d;
-            color: white;
-            padding: 12px 30px;
-            text-decoration: none;
-            border-radius: 5px;
-            font-weight: bold;
-            margin: 20px 0;
-        }}
-        .cta-button:hover {{
-            background-color: #2c5282;
-        }}
-        .footer {{
-            border-top: 1px solid #ddd;
-            padding-top: 15px;
-            margin-top: 25px;
-            font-size: 12px;
-            color: #666;
-        }}
-        .highlight {{
-            background-color: #f7fafc;
-            padding: 15px;
-            border-left: 4px solid #1a365d;
-            margin: 20px 0;
-        }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <p class="firm-name">Richards & Law</p>
-        <p style="margin: 5px 0; color: #666;">Personal Injury Attorneys</p>
-    </div>
-    
-    <div class="content">
-        <p>Dear {client_first_name},</p>
+        # Set up Jinja2 environment (looks in the current directory for templates)
+        env = Environment(loader=FileSystemLoader('.'))
+        template = env.get_template('email_template.html')
         
-        <p>Thank you for reaching out to Richards & Law regarding the incident that occurred on <strong>{formatted_date}</strong> at <strong>{accident_details.accident_location}</strong>.</p>
-        
-        <div class="highlight">
-            <p style="margin: 0;">We understand that {accident_details.accident_description.lower()} This must be a difficult time for you, and we want you to know that our team is here to help you navigate through this process.</p>
-        </div>
-        
-        <p>After reviewing the details of your case, we have prepared a Retainer Agreement for your review. This agreement outlines the terms of our representation and ensures that we can begin working on your behalf as quickly as possible to protect your rights and pursue the compensation you deserve.</p>
-        
-        <p><strong>Please find the Retainer Agreement attached to this email as a PDF.</strong> We encourage you to review it carefully before our consultation.</p>
-        
-        <p>To discuss your case in detail and answer any questions you may have, please schedule a {consultation_type} consultation at your earliest convenience:</p>
-        
-        <p style="text-align: center;">
-            <a href="{scheduling_link}" class="cta-button">Schedule Your Consultation</a>
-        </p>
-        
-        <p>Time is of the essence in personal injury cases, and we are committed to providing you with the swift, professional representation you deserve. We look forward to speaking with you soon.</p>
-        
-        <p>Warm regards,</p>
-        
-        <p><strong>Andrew Richards</strong><br>
-        Managing Attorney<br>
-        Richards & Law</p>
-    </div>
-    
-    <div class="footer">
-        <p>Richards & Law | Personal Injury Attorneys<br>
-        This email and any attachments are confidential and intended solely for the use of the individual or entity to whom they are addressed.</p>
-    </div>
-</body>
-</html>
-"""
+        # Render the HTML by passing the variables to the template
+        html_body = template.render(
+            client_first_name=client_first_name,
+            formatted_date=formatted_date,
+            accident_location=accident_details.accident_location,
+            accident_description=accident_details.accident_description,
+            consultation_type=consultation_type,
+            scheduling_link=scheduling_link
+        )
         
         return subject, html_body
     
@@ -191,7 +104,6 @@ class EmailService:
         subject, html_body = self.generate_client_email_content(
             accident_details,
             client_first_name,
-            client_email
         )
         
         # Create message
