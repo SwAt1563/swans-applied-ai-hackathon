@@ -6,11 +6,15 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # 1. Define the directory instead of a single file
 TOKENS_DIR = Path("clio_tokens_storage")
 
 # 2. Ensure the directory exists when the app starts up
 TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class ClioSDK:
     def __init__(self) -> None:
@@ -100,6 +104,15 @@ class ClioSDK:
         for client in self._clients.values():
             await client.aclose()
         self._clients.clear()
+
+
+    def delete_tokens(self, user_id: str):
+        """Deletes the saved token file for a specific user to log them out."""
+        # Note: Make sure this filename matches exactly what you use in your 
+        # _read_tokens_from_file and _save_tokens_to_file methods!
+        user_file = self._get_token_file_path(user_id)
+        if user_file.exists():
+            user_file.unlink()
 
     async def _get_request_headers(self, user_id: str) -> dict:
         tokens = self._read_tokens_from_file(user_id)

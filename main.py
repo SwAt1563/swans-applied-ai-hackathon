@@ -101,7 +101,7 @@ async def oauth_callback(code: str = Query(...), state: str = Query(DEMO_USER_ID
     try:
         # Save the tokens specifically for this user_id (passed back via 'state')
         await clio.exchange_code_for_tokens(code, user_id=state)
-        return RedirectResponse(url="/app")
+        return RedirectResponse(url="/")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}")
 
@@ -115,6 +115,18 @@ def oauth_status():
     
     is_valid = time.time() < tokens.get("expires_at", 0)
     return {"authenticated": True, "token_valid": is_valid}
+
+@app.get("/oauth/logout")
+async def oauth_logout():
+    """Logs the user out by deleting their token file, then redirects to home."""
+    try:
+        # Delete the token file
+        clio.delete_tokens(DEMO_USER_ID)
+        
+        # Redirect the user back to your landing page or login page
+        return RedirectResponse(url="/oauth/login") 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to logout: {str(e)}")
 
 @app.post("/api/extract-pdf", response_model=ExtractedDataResponse)
 async def extract_pdf(file: UploadFile = File(...)):
@@ -477,7 +489,7 @@ async def preview_email(data: VerifiedData):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/app", response_class=FileResponse)
+@app.get("/", response_class=FileResponse)
 async def verification_ui():
     """Serve the verification UI for reviewing extracted data."""
     return FileResponse("index.html")

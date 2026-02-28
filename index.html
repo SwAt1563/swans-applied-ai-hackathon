@@ -24,7 +24,7 @@
             </div>
         </div>
 
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div id="upload-section" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
             <h2 class="text-xl font-semibold mb-4">Step 1: Upload Police Report</h2>
             <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center" id="drop-zone">
                 <input type="file" id="pdf-input" accept=".pdf" class="hidden">
@@ -173,22 +173,37 @@
     <script>
         let extractedData = null;
 
-        // Check auth status
+       // Check auth status
         async function checkAuth() {
             try {
                 const resp = await fetch('/oauth/status');
                 const data = await resp.json();
                 const indicator = document.getElementById('auth-indicator');
+                const uploadSection = document.getElementById('upload-section'); // <-- Get the section
+                
                 if (data.authenticated) {
-                    indicator.textContent = 'Connected';
-                    indicator.className = 'px-3 py-1 rounded-full text-sm bg-green-100 text-green-800';
+                    indicator.innerHTML = `
+                        <span class="mr-2">Connected</span> 
+                        <a href="/oauth/logout" class="text-red-600 hover:text-red-800 underline text-xs font-semibold border-l border-green-300 pl-2">
+                            Logout
+                        </a>
+                    `;
+                    indicator.className = 'px-3 py-1 rounded-full text-sm bg-green-100 text-green-800 flex items-center';
+                    
+                    // Show the upload section!
+                    uploadSection.classList.remove('hidden'); 
+                    
                     loadMattersAndTemplates();
                 } else {
-                    indicator.innerHTML = '<a href="/oauth/login" class="text-blue-600 underline">Click to connect</a>';
-                    indicator.className = 'px-3 py-1 rounded-full text-sm bg-yellow-100 text-yellow-800';
+                    indicator.innerHTML = '<a href="/oauth/login" class="text-blue-600 underline font-semibold">Click to connect to Clio</a>';
+                    indicator.className = 'px-3 py-1 rounded-full text-sm bg-yellow-100 text-yellow-800 inline-block';
+                    
+                    // Keep it hidden if they are logged out
+                    uploadSection.classList.add('hidden'); 
                 }
             } catch (e) {
                 document.getElementById('auth-indicator').textContent = 'Error';
+                document.getElementById('auth-indicator').className = 'px-3 py-1 rounded-full text-sm bg-red-100 text-red-800';
             }
         }
 
