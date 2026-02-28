@@ -1,17 +1,13 @@
 import os
-import json
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
 
-load_dotenv()
 
 from clio_sdk import clio
 from pdf_parser import get_pdf_parser, AccidentDetails
@@ -24,6 +20,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import re
 from docx.shared import Pt, Inches  # <-- Add Inches here
 import time
+import asyncio
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ==========================================
 # Hackathon Multi-Tenant Mock
@@ -173,14 +174,16 @@ async def run_full_workflow(request: WorkflowRequest):
         contact_id = client_info.get("id") if isinstance(client_info, dict) else None
         
         if contact_id:
-            contact = await clio.get_contact(user_id=DEMO_USER_ID, contact_id=contact_id, fields="id,first_name,primary_email_address")
-            email_field = contact.get("primary_email_address", "")
-            client_email = email_field.get("address", "") if isinstance(email_field, dict) else email_field
+            contact = await clio.get_contact(user_id=DEMO_USER_ID, contact_id=contact_id, fields="id,first_name,last_name,primary_email_address")
+            client_email = contact.get("primary_email_address", "")
             client_first_name = contact.get("first_name", accident_details.client_name.split()[0])
+            client_last_name = contact.get("last_name", accident_details.client_name.split()[-1])
+            client_name = f"{client_first_name} {client_last_name}"
         else:
-            client_email = ""
-            client_first_name = accident_details.client_name.split()[0]
-            errors.append("No client contact found on matter")
+            errors.append("No contact associated with this matter.")
+            response.errors = errors
+            return response
+ 
             
         # Step 3: Upsert Custom Fields
         sol_date = accident_details.statute_of_limitations_date
@@ -251,7 +254,7 @@ async def run_full_workflow(request: WorkflowRequest):
             
             await clio.create_calendar_entry(
                 user_id=DEMO_USER_ID,
-                summary=f"STATUTE OF LIMITATIONS - {accident_details.client_name}",
+                summary=f"STATUTE OF LIMITATIONS - {client_name}",
                 start_at=datetime.strptime(sol_date, "%Y-%m-%d"),
                 end_at=datetime.strptime(sol_date, "%Y-%m-%d") + timedelta(hours=1),
                 matter_id=matter_id, 
@@ -266,22 +269,56 @@ async def run_full_workflow(request: WorkflowRequest):
         # Step 5: Generate Document
         retainer_pdf_content = None
         try:
+            # Tell Clio to generate the document AND format it as a PDF
             doc_result = await clio.create_document_from_template(
                 user_id=DEMO_USER_ID,
                 template_id=template_id, 
                 matter_id=matter_id,
-                filename=f"Retainer_Agreement_{accident_details.client_name.replace(' ', '_')}"
+                filename=f"Retainer_Agreement_{client_name.replace(' ', '_')}",
+                formats=["pdf"] # <-- Explicitly request PDF format
             )
             response.document_generated = True
-            if doc_result.get("document", {}).get("id"):
-                retainer_pdf_content = await clio.download_document(user_id=DEMO_USER_ID, document_id=doc_result["document"]["id"])
+            
+            automation_job_id = doc_result.get("id")
+            
+            if automation_job_id:
+                # --- START POLLING LOOP ---
+                max_attempts = 8
+                actual_document_id = None
+                
+                for attempt in range(max_attempts):
+                    # Check if the PDF was somehow generated instantly on the first try
+                    current_state = doc_result.get("state") if attempt == 0 else job_status.get("state")
+                    
+                    if current_state == "failed":
+                        errors.append("Clio failed to generate the document.")
+                        break
+                        
+                    if current_state == "completed":
+                        # If it's done, grab the ID from the documents array!
+                        generated_docs = doc_result.get("documents", []) if attempt == 0 else job_status.get("documents", [])
+                        if generated_docs and len(generated_docs) > 0:
+                            actual_document_id = generated_docs[0]["id"]
+                        break
+
+                    # If not done, wait 4 seconds and ask Clio again
+                    await asyncio.sleep(4)
+                    job_status = await clio.get_document_automation(DEMO_USER_ID, automation_job_id)
+                # --- END POLLING LOOP ---
+
+                # Now that we have the real file ID, download the actual bytes
+                if actual_document_id:
+                    retainer_pdf_content = await clio.download_document(user_id=DEMO_USER_ID, document_id=actual_document_id)
+                else:
+                    errors.append("Document generation timed out or returned no files after 32 seconds.")
+                    
         except Exception as e:
             errors.append(f"Document generation error: {str(e)}")
 
         # Step 6: Email
         if client_email:
             email_result = await email_service.send_client_email(
-                client_email=client_email, client_first_name=client_first_name,
+                client_email=client_email, client_name=client_name,
                 accident_details=accident_details, retainer_pdf_content=retainer_pdf_content
             )
             if email_result["status"] == "sent": response.email_sent = True
@@ -424,7 +461,7 @@ async def preview_email(data: VerifiedData):
         
         subject, html_body = email_service.generate_client_email_content(
             accident_details=accident_details,
-            client_first_name=data.client_name.split()[0],
+            client_name=data.client_name,
         )
         
         scheduling_link, link_type = email_service.get_seasonal_scheduling_link()

@@ -49,7 +49,7 @@ class EmailService:
     def generate_client_email_content(
         self, 
         accident_details: AccidentDetails,
-        client_first_name: str,
+        client_name: str,
     ) -> tuple[str, str]:
         """
         Generate personalized email content for the potential client using Jinja2.
@@ -72,7 +72,7 @@ class EmailService:
         
         # Render the HTML by passing the variables to the template
         html_body = template.render(
-            client_first_name=client_first_name,
+            client_name=client_name,
             formatted_date=formatted_date,
             accident_location=accident_details.accident_location,
             accident_description=accident_details.accident_description,
@@ -85,7 +85,7 @@ class EmailService:
     async def send_client_email(
         self,
         client_email: str,
-        client_first_name: str,
+        client_name: str,
         accident_details: AccidentDetails,
         retainer_pdf_content: bytes = None
     ) -> dict:
@@ -94,7 +94,7 @@ class EmailService:
         
         Args:
             client_email: Client's email address
-            client_first_name: Client's first name
+            client_name: Client's full name
             accident_details: Extracted accident details
             retainer_pdf_content: Optional PDF bytes of the retainer agreement
             
@@ -103,7 +103,7 @@ class EmailService:
         """
         subject, html_body = self.generate_client_email_content(
             accident_details,
-            client_first_name,
+            client_name,
         )
         
         # Create message
@@ -121,7 +121,7 @@ class EmailService:
             pdf_attachment.add_header(
                 'Content-Disposition', 
                 'attachment', 
-                filename=f"Retainer_Agreement_{accident_details.client_name.replace(' ', '_')}.pdf"
+                filename=f"Retainer_Agreement_{client_name.replace(' ', '_')}.pdf"
             )
             msg.attach(pdf_attachment)
         

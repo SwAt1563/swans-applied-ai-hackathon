@@ -325,6 +325,22 @@ class ClioSDK:
         response = await client.post("/calendar_entries.json", json={"data": data})
         response.raise_for_status()
         return response.json().get("data", {})
+    
+
+    async def create_document_template(self, user_id: str, filename: str, file_base64: str) -> Dict:
+        """Create a new Document Template in Clio using a base64 encoded file."""
+        client = await self._get_httpx_client(user_id)
+        
+        payload = {
+            "data": {
+                "filename": filename,
+                "file": file_base64
+            }
+        }
+        
+        response = await client.post("/document_templates.json", json=payload)
+        response.raise_for_status()
+        return response.json().get("data", {})
 
     async def get_document_templates(self, user_id: str) -> List[Dict]:
         client = await self._get_httpx_client(user_id)
@@ -343,43 +359,38 @@ class ClioSDK:
             "filename": filename,
             "formats": formats or ["original"]
         }
-        response = await client.post("/document_automations.json", json={"data": data})
+        response = await client.post("/document_automations.json", json={"data": data}, params={"fields": "id,state,documents{id}"})
         response.raise_for_status()
         return response.json().get("data", {})
+    
 
-    async def get_document(self, user_id: str, document_id: int) -> Dict:
+    async def get_document_automation(self, user_id: str, automation_id: int) -> dict:
+        """Check the status of a document automation job to see if the PDF is ready."""
         client = await self._get_httpx_client(user_id)
-        response = await client.get(f"/documents/{document_id}.json", params={"fields": "id,name,latest_document_version"})
+        
+        # We specifically ask Clio for the state, and the IDs of the generated documents
+        response = await client.get(
+            f"/document_automations/{automation_id}.json",
+            params={"fields": "id,state,documents{id}"}
+        )
         response.raise_for_status()
+        
         return response.json().get("data", {})
+    
 
     async def download_document(self, user_id: str, document_id: int) -> bytes:
         client = await self._get_httpx_client(user_id)
-        doc = await self.get_document(user_id, document_id)
-        version = doc.get("latest_document_version", {})
         
-        response = await client.get(f"/document_versions/{version['id']}.json", params={"fields": "id,download_url"})
+        # Hit the shortcut endpoint and let httpx automatically follow the 303 redirect to the file
+        response = await client.get(
+            f"/documents/{document_id}/download.json",
+            follow_redirects=True  # <-- This is the magic key!
+        )
         response.raise_for_status()
-        download_url = response.json().get("data", {}).get("download_url")
         
-        async with httpx.AsyncClient() as download_client:
-            dl_response = await download_client.get(download_url)
-            dl_response.raise_for_status()
-            return dl_response.content
+        return response.content
+
         
-    async def create_document_template(self, user_id: str, filename: str, file_base64: str) -> Dict:
-        """Create a new Document Template in Clio using a base64 encoded file."""
-        client = await self._get_httpx_client(user_id)
-        
-        payload = {
-            "data": {
-                "filename": filename,
-                "file": file_base64
-            }
-        }
-        
-        response = await client.post("/document_templates.json", json=payload)
-        response.raise_for_status()
-        return response.json().get("data", {})
+    
 
 clio = ClioSDK()
