@@ -11,7 +11,7 @@ pydantic-settings
 python-dotenv
 
 # Google Gemini AI
-google-generativeai
+google-genai
 
 # PDF Processing (optional - if additional PDF parsing needed)
 # PyMuPDF>=1.24.0

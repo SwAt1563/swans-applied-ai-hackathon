@@ -4,7 +4,8 @@ import base64
 from datetime import datetime
 from typing import Optional, Literal
 from pydantic import BaseModel, Field, computed_field
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
 class AccidentDetails(BaseModel):
@@ -42,27 +43,32 @@ class AccidentDetails(BaseModel):
 class GeminiPDFParser:
     def __init__(self):
         api_key = os.getenv("GOOGLE_API_KEY")
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-3.1-pro-preview')
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is not set")
+        
+        # --- NEW INITIALIZATION ---
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = 'gemini-3.1-pro-preview'
     
     async def parse_police_report(self, pdf_content: bytes) -> AccidentDetails:
-        pdf_base64 = base64.standard_b64encode(pdf_content).decode("utf-8")
         
-        # PROMPT SIMPLIFIED: We no longer need to explain the JSON format!
         extraction_prompt = """You are an expert legal document analyzer. Analyze this police report PDF and extract the required information.
         IMPORTANT: Carefully identify who is the VICTIM/CLIENT (the person who was harmed) versus the DEFENDANT (the at-fault party).
         Look for indicators like: "Victim" vs "Suspect" labels, who was injured, and who is listed as at-fault."""
 
-        # Call Gemini with the PDF and the Structured Output Configuration
-        response = self.model.generate_content(
-            [
+        # --- NEW GENERATION CALL ---
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=[
                 extraction_prompt,
-                {"mime_type": "application/pdf", "data": pdf_base64}
+                # The new SDK handles raw bytes directly! No manual base64 encoding needed.
+                types.Part.from_bytes(data=pdf_content, mime_type="application/pdf")
             ],
-            # This forces Gemini to adhere exactly to your Pydantic model
-            generation_config=genai.GenerationConfig(
+            # Use the new GenerateContentConfig
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=AccidentDetails,
+                temperature=0.0 # Set to 0.0 for more consistent data extraction
             )
         )
         
